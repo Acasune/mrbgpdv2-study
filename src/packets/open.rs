@@ -2,7 +2,7 @@ use std::net::Ipv4Addr;
 
 use super::header::{self, Header, MessageType};
 use crate::bgp_type::{AutonomousSystemNumber, HoldTime, Version};
-use crate::error::{ConvertBgpMessageToBytesError, ConvertBytesToBgpMessageError};
+use crate::error::ConvertBytesToBgpMessageError;
 use anyhow::Context;
 use bytes::{BufMut, BytesMut};
 
@@ -11,9 +11,10 @@ pub struct OpenMessage {
     header: Header,
     version: Version,
     my_as_number: AutonomousSystemNumber,
-    hold_time: HoldTime,
+    hold_time: HoldTime, // 正常系のみ実装するので一旦実質的に使用しない。
     bgp_identifier: Ipv4Addr,
 
+    // 使用しないが、相手から受信したときに一応保存しておくためにプロパティとして用意
     optional_parameter_length: u8,
     optional_parameters: BytesMut,
 }
@@ -53,7 +54,7 @@ impl TryFrom<BytesMut> for OpenMessage {
         )?));
         let b: [u8; 4] = bytes[24..28]
             .try_into()
-            .context("Ip Addressのoctetsを取得できませんでした")?;
+            .context("Ip Addressのoctetsを取得できませんでした。")?;
         let bgp_identifier = Ipv4Addr::from(b);
         let optional_parameter_length = bytes[28];
         let optional_parameters = BytesMut::from(&bytes[29..]);
@@ -89,6 +90,7 @@ impl From<OpenMessage> for BytesMut {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
     fn convert_bytes_to_open_message_and_open_message_to_bytes() {
         let open_message = OpenMessage::new(64512.into(), "127.0.0.1".parse().unwrap());
