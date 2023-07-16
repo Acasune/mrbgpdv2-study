@@ -6,4 +6,5 @@ pub enum Event {
     TcpConnectionConfirmed,
     BgpOpen(OpenMessage),
     KeepAliveMsg(KeepaliveMessage),
+    Established,
 }
