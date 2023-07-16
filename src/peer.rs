@@ -1,5 +1,25 @@
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn peer_can_transition_to_open_sent_state() {
+        let config: Config = "64512 127.0.0.1 64513 127.0.0.2 active".parse().unwrap();
+        let mut peer = Peer::new(config);
+        peer.start();
+
+        tokio::spawn(async move {
+            let remote_config = "64513 127.0.0.2 65412 127.0.0.1 passive".parse().unwrap();
+            let mut remote_peer = Peer::new(remote_config);
+            remote_peer.start();
+            remote_peer.next().await;
+            remote_peer.next().await;
+        });
+
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        peer.next().await;
+        peer.next().await;
+        assert_eq!(peer.state, State::OpenSent);
+    }
+
     use super::*;
     use tokio::time::{sleep, Duration};
     #[tokio::test]
@@ -21,11 +41,11 @@ mod tests {
     }
 }
 
-use crate::config::Config;
 use crate::connection::Connection;
 use crate::event::Event;
 use crate::event_queue::EventQueue;
 use crate::state::State;
+use crate::{config::Config, packets::message::Message};
 use tracing::{debug, info, instrument};
 
 #[derive(Debug)]
@@ -72,6 +92,20 @@ impl Peer {
                         panic!("TCP Connectionの確立ができませんでした。{:?}", self.config)
                     }
                     self.state = State::Connect;
+                }
+                _ => {}
+            },
+            State::Connect => match event {
+                Event::TcpConnectionConfirmed => {
+                    self.tcp_connection
+                        .as_mut()
+                        .expect("TCP Connectionが確立できていません。")
+                        .send(Message::new_open(
+                            self.config.local_as,
+                            self.config.local_ip,
+                        ))
+                        .await;
+                    self.state = State::OpenSent
                 }
                 _ => {}
             },

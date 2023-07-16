@@ -1,12 +1,16 @@
 use anyhow::{Context, Result};
+use bytes::BytesMut;
+use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
 
 use crate::config::{Config, Mode};
 use crate::error::CreateConnectionError;
+use crate::packets::message::Message;
 
 #[derive(Debug)]
 pub struct Connection {
     conn: TcpStream,
+    buffer: BytesMut,
 }
 
 impl Connection {
@@ -15,12 +19,19 @@ impl Connection {
             Mode::Active => Self::connect_to_remote_peer(config).await,
             Mode::Passive => Self::wait_connection_from_remote_peer(config).await,
         }?;
-        Ok(Self { conn })
+        let buffer = BytesMut::with_capacity(1500);
+        Ok(Self { conn, buffer })
     }
+
+    pub async fn send(&mut self, message: Message) {
+        let bytes: BytesMut = message.into();
+        self.conn.write_all(&bytes[..]).await;
+    }
+
     #[feature(result_option_inspect)]
     async fn connect_to_remote_peer(config: &Config) -> Result<TcpStream> {
         let bgp_port = 179;
-        TcpStream::connect(( config.remote_ip, bgp_port))
+        TcpStream::connect((config.remote_ip, bgp_port))
             .await
             .context(format!(
                 "cannot connect to remote peer {0}:{1}",
