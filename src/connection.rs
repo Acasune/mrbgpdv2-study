@@ -27,7 +27,7 @@ impl Connection {
 
     pub async fn send(&mut self, message: Message) {
         let bytes: BytesMut = message.into();
-        let a = self.conn.write_all(&bytes[..]).await;
+        self.conn.write_all(&bytes[..]).await;
     }
 
     pub async fn get_message(&mut self) -> Option<Message> {
@@ -39,8 +39,8 @@ impl Connection {
     async fn read_data_from_tcp_connection(&mut self) {
         loop {
             let mut buf: Vec<u8> = vec![];
-            let result = self.conn.try_read_buf(&mut buf);
-            match result {
+            // let result = self.conn.try_read_buf(&mut buf);
+            match self.conn.try_read_buf(&mut buf) {
                 Ok(0) => (),
                 Ok(n) => self.buffer.put(&buf[..]),
                 Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => break,
