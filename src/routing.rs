@@ -1,6 +1,9 @@
+use std::collections::hash_map::Keys;
+use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};
 use std::ops::{Deref, DerefMut};
 use std::str::FromStr;
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use bytes::{BufMut, BytesMut};
@@ -8,11 +11,82 @@ use futures::TryStreamExt;
 use ipnetwork;
 use rtnetlink::new_connection;
 
+use crate::bgp_type::AutonomousSystemNumber;
 use crate::config::Config;
 use crate::error::{ConfigParseError, ConstructIpv4NetworkError, ConvertBytesToBgpMessageError};
+use crate::path_attribute::{AsPath, Origin, PathAttribute};
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-struct LocRib;
+pub struct LocRib {
+    rib: Rib,
+    local_as_number: AutonomousSystemNumber,
+}
+
+impl Deref for LocRib {
+    type Target = Rib;
+
+    fn deref(&self) -> &Self::Target {
+        &self.rib
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
+pub enum RibEntryStatus {
+    New,
+    UnChanged,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Hash)]
+pub struct RibEntry {
+    pub network_address: Ipv4Network,
+    pub path_attributes: Arc<Vec<PathAttribute>>,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct Rib(HashMap<Arc<RibEntry>, RibEntryStatus>);
+
+impl Rib {
+    pub fn new() -> Self {
+        Self(HashMap::new())
+    }
+
+    pub fn insert(&mut self, entry: Arc<RibEntry>) {
+        self.0.entry(entry).or_insert(RibEntryStatus::New);
+    }
+
+    pub fn routes(&self) -> Keys<'_, Arc<RibEntry>, RibEntryStatus> {
+        self.0.keys()
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct AdjRibOut(Rib);
+
+impl AdjRibOut {
+    pub fn new() -> Self {
+        Self(Rib::new())
+    }
+    pub fn install_from_loc_rib(&mut self, loc_rib: &LocRib, config: &Config) {
+        loc_rib
+            .routes()
+            .filter(|entry| !entry.does_contain_as(config.remote_as))
+            .for_each(|r| self.insert(Arc::clone(r)));
+    }
+}
+
+impl Deref for AdjRibOut {
+    type Target = Rib;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for AdjRibOut {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Hash, PartialOrd, Ord)]
 pub struct Ipv4Network(ipnetwork::Ipv4Network);
@@ -50,7 +124,25 @@ impl FromStr for Ipv4Network {
 
 impl LocRib {
     pub async fn new(config: &Config) -> Result<Self> {
-        todo!();
+        let path_attributes = Arc::new(vec![
+            PathAttribute::Origin(Origin::Igp),
+            PathAttribute::AsPath(AsPath::AsSequence(vec![])),
+            PathAttribute::NextHop(config.local_ip),
+        ]);
+        let mut rib = Rib::new();
+        for network in &config.networks {
+            let routes = Self::lookup_kernel_routing_table(*network).await?;
+            for route in routes {
+                rib.insert(Arc::new(RibEntry {
+                    network_address: route,
+                    path_attributes: Arc::clone(&path_attributes),
+                }))
+            }
+        }
+        Ok(Self {
+            rib,
+            local_as_number: config.local_as,
+        })
     }
 
     async fn lookup_kernel_routing_table(
@@ -76,11 +168,22 @@ impl LocRib {
     }
 }
 
+impl RibEntry {
+    fn does_contain_as(&self, as_number: AutonomousSystemNumber) -> bool {
+        for path_attribute in self.path_attributes.iter() {
+            if let PathAttribute::AsPath(as_path) = path_attribute {
+                return as_path.does_contain(as_number);
+            }
+        }
+        false
+    }
+}
+
 impl Ipv4Network {
     pub fn new(addr: Ipv4Addr, prefix: u8) -> Result<Self, ConstructIpv4NetworkError> {
         let net = ipnetwork::Ipv4Network::new(addr, prefix).context(format!(
             "Ipv4NetworkをConstructできませんでしたaddr:{}, prefix: {}
-      ",
+            ",
             addr, prefix
         ))?;
         Ok(Self(net))
@@ -178,5 +281,26 @@ mod tests {
         let routes = LocRib::lookup_kernel_routing_table(network).await.unwrap();
         let expected = vec![network];
         assert_eq!(routes, expected);
+    }
+
+    #[tokio::test]
+    async fn loclib_to_adj_rib_out() {
+        let config = "64513 10.200.100.3 64512 10.200.100.2 passive 10.100.220.0/24"
+            .parse()
+            .unwrap();
+        let mut loc_rib = LocRib::new(&config).await.unwrap();
+        let mut adj_rib_out = AdjRibOut::new();
+        adj_rib_out.install_from_loc_rib(&mut loc_rib, &config);
+
+        let mut expected_adj_rib_out = AdjRibOut::new();
+        expected_adj_rib_out.insert(Arc::new(RibEntry {
+            network_address: "10.100.220.0/24".parse().unwrap(),
+            path_attributes: Arc::new(vec![
+                PathAttribute::Origin(Origin::Igp),
+                PathAttribute::AsPath(AsPath::AsSequence(vec![])),
+                PathAttribute::NextHop("10.200.100.3".parse().unwrap()),
+            ]),
+        }));
+        assert_eq!(adj_rib_out, expected_adj_rib_out);
     }
 }

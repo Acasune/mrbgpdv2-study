@@ -53,6 +53,12 @@ impl AsPath {
 
         1 + 1 + as_bytes_length
     }
+    pub fn does_contain(&self, as_path: AutonomousSystemNumber) -> bool {
+        match self {
+            AsPath::AsSequence(seq) => seq.contains(&as_path),
+            AsPath::AsSet(set) => set.contains(&as_path),
+        }
+    }
 }
 
 impl From<&PathAttribute> for BytesMut {
