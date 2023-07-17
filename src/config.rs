@@ -1,5 +1,6 @@
 use crate::bgp_type::AutonomousSystemNumber;
 use crate::error::ConfigParseError;
+use crate::routing::Ipv4Network;
 use anyhow::{Context, Result};
 use std::net::Ipv4Addr;
 use std::str::FromStr;
@@ -11,6 +12,7 @@ pub struct Config {
     pub remote_as: AutonomousSystemNumber,
     pub remote_ip: Ipv4Addr,
     pub mode: Mode,
+    pub networks: Vec<Ipv4Network>,
 }
 
 #[derive(PartialEq, Eq, Debug, Clone, Copy, Hash, PartialOrd, Ord)]
@@ -65,12 +67,22 @@ impl FromStr for Config {
           ",
             config[4], s
         ))?;
+        let mut networks: Vec<Ipv4Network> = vec![];
+        for network in &config[5..] {
+            networks.push(network.parse().context(format!(
+                "cannot parse config[5..], {0}\
+                as Ipv4Network and config is {1}
+                ",
+                network, s
+            ))?)
+        }
         Ok(Self {
             local_as,
             local_ip,
             remote_as,
             remote_ip,
             mode,
+            networks,
         })
     }
 }
