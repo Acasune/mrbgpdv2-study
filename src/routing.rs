@@ -14,7 +14,8 @@ use rtnetlink::new_connection;
 use crate::bgp_type::AutonomousSystemNumber;
 use crate::config::Config;
 use crate::error::{ConfigParseError, ConstructIpv4NetworkError, ConvertBytesToBgpMessageError};
-use crate::path_attribute::{AsPath, Origin, PathAttribute};
+use crate::packets::update::UpdateMessage;
+use crate::path_attribute::{self, AsPath, Origin, PathAttribute};
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct LocRib {
@@ -265,6 +266,46 @@ impl From<&Ipv4Network> for BytesMut {
         bytes.put_u8(prefix);
         bytes.put(&network_bytes[..]);
         bytes
+    }
+}
+
+impl AdjRibOut {
+    pub fn create_update_message(
+        &self,
+        local_ip: Ipv4Addr,
+        local_as: AutonomousSystemNumber,
+    ) -> Vec<UpdateMessage> {
+        let mut hash_map: HashMap<Arc<Vec<PathAttribute>>, Vec<Ipv4Network>> = HashMap::new();
+        for entry in self.routes() {
+            if let Some(routes) = hash_map.get_mut(&entry.path_attributes) {
+                routes.push(entry.network_address);
+            } else {
+                hash_map.insert(
+                    Arc::clone(&entry.path_attributes),
+                    vec![entry.network_address],
+                );
+            }
+        }
+
+        let mut updates = vec![];
+        for (path_attribute, routes) in hash_map.into_iter() {
+            let mut path_attributes = Arc::<Vec<PathAttribute>>::unwrap_or_clone(path_attribute);
+            for p in path_attributes.iter_mut() {
+                if let PathAttribute::NextHop(n) = p {
+                    *n = local_ip
+                }
+                if let PathAttribute::AsPath(ases) = p {
+                    ases.push(local_as);
+                }
+            }
+
+            updates.push(UpdateMessage::new(
+                Arc::new(path_attributes),
+                routes,
+                vec![],
+            ));
+        }
+        updates
     }
 }
 

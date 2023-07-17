@@ -126,6 +126,7 @@ mod tests {
     use crate::{
         bgp_type::AutonomousSystemNumber,
         path_attribute::{AsPath, Origin},
+        routing::{AdjRibOut, RibEntry},
     };
 
     use super::*;
@@ -153,5 +154,42 @@ mod tests {
         let update_message_bytes: BytesMut = update_message.clone().into();
         let update_message2: UpdateMessage = update_message_bytes.try_into().unwrap();
         assert_eq!(update_message, update_message2);
+    }
+
+    #[tokio::test]
+    async fn update_message_from_adj_rib_out() {
+        let some_as: AutonomousSystemNumber = 64513.into();
+        let some_ip: Ipv4Addr = "10.0.100.3".parse().unwrap();
+
+        let local_as: AutonomousSystemNumber = 64514.into();
+        let local_ip: Ipv4Addr = "10.200.100.3".parse().unwrap();
+
+        let rib_path_attributes = Arc::new(vec![
+            PathAttribute::Origin(Origin::Igp),
+            PathAttribute::AsPath(AsPath::AsSequence(vec![some_as])),
+            PathAttribute::NextHop(some_ip),
+        ]);
+
+        let update_message_path_attributes = Arc::new(vec![
+            PathAttribute::Origin(Origin::Igp),
+            PathAttribute::AsPath(AsPath::AsSequence(vec![some_as, local_as])),
+            PathAttribute::NextHop(local_ip),
+        ]);
+        let mut adj_rib_out = AdjRibOut::new();
+
+        adj_rib_out.insert(Arc::new(RibEntry {
+            network_address: "10.100.220.0/24".parse().unwrap(),
+            path_attributes: rib_path_attributes,
+        }));
+
+        let expected_update_message = UpdateMessage::new(
+            update_message_path_attributes,
+            vec!["10.100.220.0/24".parse().unwrap()],
+            vec![],
+        );
+        assert_eq!(
+            adj_rib_out.create_update_message(local_ip, local_as),
+            vec![expected_update_message]
+        );
     }
 }
