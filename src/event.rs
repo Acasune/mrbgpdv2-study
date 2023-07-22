@@ -8,4 +8,7 @@ pub enum Event {
     KeepAliveMsg(KeepaliveMessage),
     UpdateMsg(UpdateMessage),
     Established,
+    LocRib,
+    LocRibChanged,
+    AdjRibOutChanged,
 }

@@ -188,7 +188,7 @@ mod tests {
             vec![],
         );
         assert_eq!(
-            adj_rib_out.create_update_message(local_ip, local_as),
+            adj_rib_out.create_update_messages(local_ip, local_as),
             vec![expected_update_message]
         );
     }

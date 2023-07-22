@@ -58,6 +58,15 @@ impl Rib {
     pub fn routes(&self) -> Keys<'_, Arc<RibEntry>, RibEntryStatus> {
         self.0.keys()
     }
+    pub fn update_to_all_changed(&mut self) {
+        self.0
+            .iter_mut()
+            .for_each(|(_, v)| *v = RibEntryStatus::UnChanged);
+    }
+    pub fn does_contain_new_route(&self) -> bool {
+        self.0.values().map(|v| &RibEntryStatus::New == v).any(|v| v)
+
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -270,7 +279,7 @@ impl From<&Ipv4Network> for BytesMut {
 }
 
 impl AdjRibOut {
-    pub fn create_update_message(
+    pub fn create_update_messages(
         &self,
         local_ip: Ipv4Addr,
         local_as: AutonomousSystemNumber,
