@@ -11,4 +11,5 @@ pub enum Event {
     LocRib,
     LocRibChanged,
     AdjRibOutChanged,
+    AdjRibInChanged,
 }

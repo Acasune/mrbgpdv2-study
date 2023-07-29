@@ -31,6 +31,12 @@ impl Deref for LocRib {
     }
 }
 
+impl DerefMut for LocRib {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.rib
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
 pub enum RibEntryStatus {
     New,
@@ -64,8 +70,10 @@ impl Rib {
             .for_each(|(_, v)| *v = RibEntryStatus::UnChanged);
     }
     pub fn does_contain_new_route(&self) -> bool {
-        self.0.values().map(|v| &RibEntryStatus::New == v).any(|v| v)
-
+        self.0
+            .values()
+            .map(|v| &RibEntryStatus::New == v)
+            .any(|v| v)
     }
 }
 
@@ -175,6 +183,36 @@ impl LocRib {
             results.push(destination);
         }
         Ok(results)
+    }
+    pub async fn write_to_kernel_routing_table(&self) -> Result<()> {
+        let (connection, handle, _) = new_connection()?;
+        tokio::spawn(connection);
+        for e in self.routes() {
+            for p in e.path_attributes.iter() {
+                if let PathAttribute::NextHop(gateway) = p {
+                    let dest = e.network_address;
+                    handle
+                        .route()
+                        .add()
+                        .v4()
+                        .destination_prefix(dest.ip(), dest.prefix())
+                        .gateway(*gateway)
+                        .execute()
+                        .await?;
+                    break;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn intsall_from_adj_rib_in(&mut self, adj_rib_in: &AdjRibIn) {
+        let local_as = self.local_as_number;
+
+        adj_rib_in
+            .routes()
+            .filter(|entry| !entry.does_contain_as(local_as))
+            .for_each(|entry| self.insert(Arc::clone(&entry)));
     }
 }
 
@@ -315,6 +353,40 @@ impl AdjRibOut {
             ));
         }
         updates
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct AdjRibIn(pub Rib);
+
+impl AdjRibIn {
+    pub fn new() -> Self {
+        Self(Rib::new())
+    }
+    pub fn install_from_update(&mut self, update: UpdateMessage, config: &Config) {
+        let path_attributes = update.path_attributes;
+        for network in update.network_layer_reachability_information {
+            let rib_entry = Arc::new(RibEntry {
+                network_address: network,
+                path_attributes: Arc::clone(&path_attributes),
+            });
+
+            self.insert(rib_entry);
+        }
+    }
+}
+
+impl Deref for AdjRibIn {
+    type Target = Rib;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for AdjRibIn {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
     }
 }
 

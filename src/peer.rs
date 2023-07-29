@@ -5,7 +5,7 @@ use crate::event::Event;
 use crate::event_queue::EventQueue;
 use crate::packets::keepalive;
 use crate::packets::update::UpdateMessage;
-use crate::routing::{AdjRibOut, LocRib};
+use crate::routing::{AdjRibIn, AdjRibOut, LocRib};
 use crate::state::State;
 use crate::{config::Config, packets::message::Message};
 use tokio::sync::Mutex;
@@ -19,6 +19,7 @@ pub struct Peer {
     config: Config,
     loc_rib: Arc<Mutex<LocRib>>,
     adj_rib_out: AdjRibOut,
+    adj_rib_in: AdjRibIn,
 }
 
 impl Peer {
@@ -26,6 +27,7 @@ impl Peer {
         let state = State::Idle;
         let event_queue = EventQueue::new();
         let adj_rib_out = AdjRibOut::new();
+        let adj_rib_in = AdjRibIn::new();
         Self {
             state,
             event_queue,
@@ -33,6 +35,7 @@ impl Peer {
             config,
             loc_rib,
             adj_rib_out,
+            adj_rib_in,
         }
     }
     #[instrument]
@@ -133,6 +136,29 @@ impl Peer {
                             .expect("TCP Connectionが確立できていません。")
                             .send(Message::Update(update))
                             .await;
+                    }
+                }
+                Event::UpdateMsg(update) => {
+                    self.adj_rib_in.install_from_update(update, &self.config);
+                    if self.adj_rib_in.does_contain_new_route() {
+                        debug!("abj_rib in is updated.");
+                        self.event_queue.enqueue(Event::AdjRibInChanged);
+                        self.adj_rib_in.update_to_all_changed();
+                    }
+                }
+                Event::AdjRibInChanged => {
+                    self.loc_rib
+                        .lock()
+                        .await
+                        .intsall_from_adj_rib_in(&self.adj_rib_in);
+                    if self.loc_rib.lock().await.does_contain_new_route() {
+                        self.loc_rib
+                            .lock()
+                            .await
+                            .write_to_kernel_routing_table()
+                            .await;
+                        self.event_queue.enqueue(Event::LocRibChanged);
+                        self.loc_rib.lock().await.update_to_all_changed();
                     }
                 }
                 _ => {}
